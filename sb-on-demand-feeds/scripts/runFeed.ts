@@ -1,76 +1,48 @@
+import { Commitment } from "@solana/web3.js";
 import * as sb from "@switchboard-xyz/on-demand";
-import yargs from "yargs";
-import { TX_CONFIG, sleep } from "./utils";
-import { PublicKey } from "@solana/web3.js";
 
-const argv = yargs(process.argv).options({ feed: { required: true } })
-  .argv as any;
+const FEED = "EKfd483tGtmrrnCJGLA2S2Tu2HvpiA4wgWgV2XGydC5p"; // weather
+// const FEED = "9KMAMN5HN4cP1jrKkqhXQDRw9XxbG7Rz9JzwT511Kkx1"; // election
+// const FEED = "5FFsFn5b4p83bYFRkXWCnPgaGPUhPtqcAabrU7q6h9Rz"; // coinflip
 
-function calculateStatistics(latencies: number[]) {
-  const sortedLatencies = [...latencies].sort((a, b) => a - b);
-  const min = sortedLatencies[0];
-  const max = sortedLatencies[sortedLatencies.length - 1];
-  const median =
-    sortedLatencies.length % 2 === 0
-      ? (sortedLatencies[sortedLatencies.length / 2 - 1] +
-          sortedLatencies[sortedLatencies.length / 2]) /
-        2
-      : sortedLatencies[Math.floor(sortedLatencies.length / 2)];
-  const sum = sortedLatencies.reduce((a, b) => a + b, 0);
-  const mean = sum / sortedLatencies.length;
+const TX_CONFIG = {
+	commitment: "processed" as Commitment,
+	skipPreflight: true,
+	maxRetries: 0,
+};
 
-  return {
-    min,
-    max,
-    median,
-    mean,
-    count: latencies.length,
-  };
+function sleep(ms: number) {
+	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 (async function main() {
-  const { keypair, connection, program } = await sb.AnchorUtils.loadEnv();
-  const feedAccount = new sb.PullFeed(program!, argv.feed!);
-  await feedAccount.preHeatLuts();
-  const latencies: number[] = [];
+	const { keypair, connection, program } = await sb.AnchorUtils.loadEnv();
+	const feedAccount = new sb.PullFeed(program!, FEED);
+	console.log("feed acc:", feedAccount.pubkey.toBase58());
 
-  while (true) {
-    const start = Date.now();
-    const [pullIx, responses, _ok, luts] = await feedAccount.fetchUpdateIx({
-      numSignatures: 2,
-    });
-    const endTime = Date.now();
-    for (const response of responses) {
-      const shortErr = response.shortError();
-      if (shortErr) {
-        console.log(`Error: ${shortErr}`);
-      }
-    }
-    const tx = await sb.asV0Tx({
-      connection,
-      ixs: [...pullIx!],
-      signers: [keypair],
-      computeUnitPrice: 200_000,
-      computeUnitLimitMultiple: 1.3,
-      lookupTables: luts,
-    });
+	while (true) {
+		const [pullIx, responses, _ok, luts] = await feedAccount.fetchUpdateIx({
+			numSignatures: 2,
+		});
 
-    const sim = await connection.simulateTransaction(tx, TX_CONFIG);
-    const updateEvent = new sb.PullFeedValueEvent(
-      sb.AnchorUtils.loggedEvents(program!, sim.value.logs!)[0]
-    ).toRows();
-    console.log("Simulated Price Updates:\n", JSON.stringify(sim.value.logs));
-    console.log("Submitted Price Updates:\n", updateEvent);
-    const latency = endTime - start;
-    latencies.push(latency);
+		const tx = await sb.asV0Tx({
+			connection,
+			ixs: [...pullIx!],
+			signers: [keypair],
+			computeUnitPrice: 200_000,
+			computeUnitLimitMultiple: 1.3,
+			lookupTables: luts,
+		});
 
-    const stats = calculateStatistics(latencies);
-    console.log(`Min latency: ${stats.min} ms`);
-    console.log(`Max latency: ${stats.max} ms`);
-    console.log(`Median latency: ${stats.median} ms`);
-    console.log(`Mean latency: ${stats.mean.toFixed(2)} ms`);
-    console.log(`Loop count: ${stats.count}`);
-    console.log(`Transaction sent: ${await connection.sendTransaction(tx)}`);
-    await sleep(3000);
-  }
+		const sim = await connection.simulateTransaction(tx, TX_CONFIG);
+		const updateEvent = new sb.PullFeedValueEvent(
+			sb.AnchorUtils.loggedEvents(program!, sim.value.logs!)[0]
+		).toRows();
+		console.log("Submitted Price Updates:\n", updateEvent);
+		console.log("Value: ", updateEvent[0].value);
+
+		await sleep(3000);
+	}
 })();
+
+
